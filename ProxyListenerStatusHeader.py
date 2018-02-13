@@ -4,6 +4,12 @@ import json as json
 import traceback
 
 '''
+Name:           Proxy Listener Status Header
+Version:        1.0
+Date:           13-Feb02-18
+Author:         Josh Grossman
+Github:         https://github.com/tghosth/Burp-Extensions
+
 This extension is designed to print the current proxy state as a header in requests. The rationale is that sometimes
 I want to test whether a client-side/mobile application is verifying the server side TLS certificate or not and I do
 this by trying to run the application using a self-signed certificate.
