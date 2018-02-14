@@ -21,7 +21,7 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         self._helpers = callbacks.getHelpers()
 
         # set our extension name
-        callbacks.setExtensionName("Custom scanner checks")
+        callbacks.setExtensionName("JSONP Scanner Check")
 
         # register ourselves as a custom scanner check
         callbacks.registerScannerCheck(self)
