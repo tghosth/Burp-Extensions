@@ -128,7 +128,7 @@ class BurpExtender(IBurpExtender, IProxyListener):
                                 elif self.disclose_ip:
                                     proxy_setting = 'Proxy IP: {0} - '.format(current_listener_ip)
 
-                            proxy_setting = '{0} - TLS Mode: {1}'.format(proxy_setting, proxy_tls_mode)
+                            proxy_setting = '{0}TLS Mode: {1}'.format(proxy_setting, proxy_tls_mode)
 
                             # The header shouldn't already exist but we want to check if it does.
                             header_exists = False
