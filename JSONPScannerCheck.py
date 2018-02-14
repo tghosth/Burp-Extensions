@@ -1,6 +1,8 @@
 from burp import IBurpExtender
 from burp import IScannerCheck
 from burp import IScanIssue
+from burp import IParameter
+
 import random
 import string
 from array import array
@@ -31,42 +33,49 @@ class BurpExtender(IBurpExtender, IScannerCheck):
     #
 
     def doPassiveScan(self, baseRequestResponse):
-            return None
+        pass
 
     # Parameter names from https://securitycafe.ro/2017/01/18/practical-jsonp-injection/ :)
     paramNames = {'callback', 'cb', 'jsonp', 'jsonpcallback', 'jcb', 'call'}
 
-
     def doActiveScan(self, baseRequestResponse, insertionPoint):
-        # make a request containing our injection test in the insertion point
 
-        if not insertionPoint.getInsertionPointType == insertionPoint.INS_URL_PATH_FILENAME:
+        # We only want to apply this check once per request, this insertion point seems to be the most sensible.
+        if not insertionPoint.getInsertionPointType() == insertionPoint.INS_PARAM_NAME_URL:
             return None
 
+        # Iterate through the list of potential JSONP parameter names
         for paramName in self.paramNames:
-            funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
-            payload = '?{0}={1}&'.format(paramName,funcName)
 
-            checkRequest = insertionPoint.buildRequest(payload)
-            checkRequestResponse = self._callbacks.makeHttpRequest(
-                baseRequestResponse.getHttpService(), checkRequest)
+            # Get a random (non cryptographically secure) six letter string to assign the parameter value
+            funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
+
+            # Get the raw base request being scanned
+            requestRaw = baseRequestResponse.getRequest()
+
+            # build a JSONP parameter using the current parameter name and the random string generated
+            newParameter = self._helpers.buildParameter(paramName, funcName, IParameter.PARAM_URL)
+
+            # add the parameter to the base request
+            checkRequest = self._helpers.addParameter(requestRaw, newParameter)
+
+            # send the request with the added parameter
+            checkRequestResponse = self._callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), checkRequest)
 
             # look for matches of our active check grep string
             matches = self._get_matches(checkRequestResponse.getResponse(), '{0}('.format(funcName))
-            if len(matches) == 0:
-                return None
+            if not len(matches) == 0:
+                # get the offsets of the payload within the request, for in-UI highlighting
+                requestHighlights = [insertionPoint.getPayloadOffsets('{0}={1}'.format(paramName, funcName))]
 
-            # get the offsets of the payload within the request, for in-UI highlighting
-            requestHighlights = [insertionPoint.getPayloadOffsets(payload)]
-
-            # report the issue
-            return [CustomScanIssue(
-                baseRequestResponse.getHttpService(),
-                self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
-                [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)],
-                "JSONP detected",
-                "Adding a parameter with the name \"{0}\" resulted in a JSONP response".format(paramName),
-                "High")]
+                # report the issue
+                return [CustomScanIssue(
+                    baseRequestResponse.getHttpService(),
+                    self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
+                    [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)],
+                    "JSONP detected",
+                    "Adding a parameter with the name \"{0}\" resulted in a JSONP response".format(paramName),
+                    "High")]
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         # This method is called when multiple issues are reported for the same URL
@@ -82,6 +91,43 @@ class BurpExtender(IBurpExtender, IScannerCheck):
 
         return 0
 
+    # helper method to search a response for occurrences of a literal match string
+    # and return a list of start/end offsets
+
+    def _get_matches(self, response, match):
+        matches = []
+        start = 0
+        reslen = len(response)
+        matchlen = len(match)
+        while start < reslen:
+            start = self._helpers.indexOf(response, match, True, start, reslen)
+            if start == -1:
+                break
+            matches.append(array('i', [start, start + matchlen]))
+            start += matchlen
+
+        return matches
+
+
+    def getInsertionPointText(self, insertionPointIn):
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_ENTIRE_BODY: return "INS_ENTIRE_BODY"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_EXTENSION_PROVIDED: return "INS_EXTENSION_PROVIDED"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_HEADER: return "INS_HEADER"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_AMF: return "INS_PARAM_AMF"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_BODY: return "INS_PARAM_BODY"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_COOKIE: return "INS_PARAM_COOKIE"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_JSON: return "INS_PARAM_JSON"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_MULTIPART_ATTR: return "INS_PARAM_MULTIPART_ATTR"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_NAME_BODY: return "INS_PARAM_NAME_BODY"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_NAME_URL: return "INS_PARAM_NAME_URL"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_URL: return "INS_PARAM_URL"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_XML: return "INS_PARAM_XML"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_XML_ATTR: return "INS_PARAM_XML_ATTR"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_UNKNOWN: return "INS_UNKNOWN"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_FILENAME: return "INS_URL_PATH_FILENAME"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_FOLDER: return "INS_URL_PATH_FOLDER"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_REST: return "INS_URL_PATH_REST"
+        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_USER_PROVIDED: return "INS_USER_PROVIDED"
 #
 # class implementing IScanIssue to hold our custom scan issue details
 #
@@ -126,3 +172,4 @@ class CustomScanIssue (IScanIssue):
 
     def getHttpService(self):
         return self._httpService
+
