@@ -33,7 +33,8 @@ class BurpExtender(IBurpExtender, IScannerCheck):
     def doPassiveScan(self, baseRequestResponse):
             return None
 
-
+    # Parameter names from https://securitycafe.ro/2017/01/18/practical-jsonp-injection/ :)
+    paramNames = {'callback', 'cb', 'jsonp', 'jsonpcallback', 'jcb', 'call'}
 
 
     def doActiveScan(self, baseRequestResponse, insertionPoint):
@@ -42,28 +43,30 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         if not insertionPoint.getInsertionPointType == insertionPoint.INS_URL_PATH_FILENAME:
             return None
 
-        funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
+        for paramName in self.paramNames:
+            funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
+            payload = '?{0}={1}&'.format(paramName,funcName)
 
-        checkRequest = insertionPoint.buildRequest(INJ_TEST)
-        checkRequestResponse = self._callbacks.makeHttpRequest(
+            checkRequest = insertionPoint.buildRequest(payload)
+            checkRequestResponse = self._callbacks.makeHttpRequest(
                 baseRequestResponse.getHttpService(), checkRequest)
 
-        # look for matches of our active check grep string
-        matches = self._get_matches(checkRequestResponse.getResponse(), INJ_ERROR_BYTES)
-        if len(matches) == 0:
-            return None
+            # look for matches of our active check grep string
+            matches = self._get_matches(checkRequestResponse.getResponse(), '{0}('.format(funcName))
+            if len(matches) == 0:
+                return None
 
-        # get the offsets of the payload within the request, for in-UI highlighting
-        requestHighlights = [insertionPoint.getPayloadOffsets(INJ_TEST)]
+            # get the offsets of the payload within the request, for in-UI highlighting
+            requestHighlights = [insertionPoint.getPayloadOffsets(payload)]
 
-        # report the issue
-        return [CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)],
-            "Pipe injection",
-            "Submitting a pipe character returned the string: " + INJ_ERROR,
-            "High")]
+            # report the issue
+            return [CustomScanIssue(
+                baseRequestResponse.getHttpService(),
+                self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
+                [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)],
+                "JSONP detected",
+                "Adding a parameter with the name \"{0}\" resulted in a JSONP response".format(paramName),
+                "High")]
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         # This method is called when multiple issues are reported for the same URL
