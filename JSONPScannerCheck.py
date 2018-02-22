@@ -38,44 +38,96 @@ class BurpExtender(IBurpExtender, IScannerCheck):
     # Parameter names from https://securitycafe.ro/2017/01/18/practical-jsonp-injection/ :)
     paramNames = {'callback', 'cb', 'jsonp', 'jsonpcallback', 'jcb', 'call'}
 
+    #                      IHttpRequestResponse IScannerInsertionPoint
     def doActiveScan(self, baseRequestResponse, insertionPoint):
 
         # We only want to apply this check once per request, this insertion point seems to be the most sensible.
         if not insertionPoint.getInsertionPointType() == insertionPoint.INS_PARAM_NAME_URL:
             return None
 
+        # Get the raw base request (byte[]) being scanned
+        requestRaw = baseRequestResponse.getRequest()
+
         # Iterate through the list of potential JSONP parameter names
         for paramName in self.paramNames:
 
-            # Get a random (non cryptographically secure) six letter string to assign the parameter value
-            funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
+            originalResponseWithMarkers = self._testForJSONP(baseRequestResponse, requestRaw, paramName, insertionPoint)
 
-            # Get the raw base request being scanned
-            requestRaw = baseRequestResponse.getRequest()
+            if len(originalResponseWithMarkers.getResponseMarkers()) != 0:
 
-            # build a JSONP parameter using the current parameter name and the random string generated
-            newParameter = self._helpers.buildParameter(paramName, funcName, IParameter.PARAM_URL)
+                reqWithChanges = requestRaw
+                reqCookieChanged = False
 
-            # add the parameter to the base request
-            checkRequest = self._helpers.addParameter(requestRaw, newParameter)
+                # IRequestInfo
+                requestInfo = self._helpers.analyzeRequest(baseRequestResponse)
 
-            # send the request with the added parameter
-            checkRequestResponse = self._callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), checkRequest)
+                for reqParam in requestInfo.getParameters():
+                    if reqParam.getType() == IParameter.PARAM_COOKIE:
+                        reqWithChanges = self._helpers.removeParameter(reqParam)
+                        reqCookieChanged = True
 
-            # look for matches of our active check grep string
-            matches = self._get_matches(checkRequestResponse.getResponse(), '{0}('.format(funcName))
-            if not len(matches) == 0:
-                # get the offsets of the payload within the request, for in-UI highlighting
-                requestHighlights = [insertionPoint.getPayloadOffsets('{0}={1}'.format(paramName, funcName))]
+
+                oldHeaders = requestInfo.getHeaders()
+                newHeaders = []
+                for reqHead in oldHeaders:
+                    if not 'Authorization' in reqHead:
+                        newHeaders.append(reqHead)
+
+                reqHeaderChanged = (len(oldHeaders) != len(newHeaders))
+
+                if reqHeaderChanged:
+                    reqWithChanges = self._helpers.buildHttpMessage(newHeaders, baseRequestResponse.getRequest()[requestInfo.getBodyOffset():])
+
+                reqChanged = reqCookieChanged | reqHeaderChanged
+
+                rating = "Medium"
+                addText = "The JSONP response was returned even without cookies or an Authorization header " \
+                          "indicating that the data returned may be less sensitive"
+
+                reqList = [originalResponseWithMarkers]
+
+                if reqChanged:
+                    nocookieResponseWithMarkers = self._testForJSONP(baseRequestResponse, reqWithChanges, paramName, insertionPoint)
+
+                    reqList.append(nocookieResponseWithMarkers)
+
+                    if len(nocookieResponseWithMarkers.getResponseMarkers()) == 0:
+                        rating = "High"
+                        addText = "The JSONP response was not returned when cookies or an Authorization header " \
+                                  "was not sent indicating that the data is likely to be sensitive"
 
                 # report the issue
                 return [CustomScanIssue(
                     baseRequestResponse.getHttpService(),
                     self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
-                    [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)],
-                    "JSONP detected",
-                    "Adding a parameter with the name \"{0}\" resulted in a JSONP response".format(paramName),
-                    "High")]
+                    reqList,
+                    "Endpoint supporting JSONP detected",
+                    "Adding a parameter with the name \"{0}\" resulted in a JSONP response. {1}".format(paramName, addText),
+                    rating)]
+
+
+    def _testForJSONP(self, baseRequestResponse, requestRaw, paramName, insertionPoint):
+        # Get a random (non cryptographically secure) six letter string to assign the parameter value
+        funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
+
+        # build a JSONP parameter (IParameter) using the current parameter name and the random string generated
+        newParameter = self._helpers.buildParameter(paramName, funcName, IParameter.PARAM_URL)
+
+        # add the parameter to the base request (byte[])
+        checkRequest = self._helpers.addParameter(requestRaw, newParameter)
+
+        # send the request with the added parameter and receive back IHttpRequestResponse
+        checkRequestResponse = self._callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), checkRequest)
+
+        # look for matches of our active check grep string
+        matches = self._get_matches(checkRequestResponse.getResponse(), '{0}('.format(funcName))
+
+        if not len(matches) == 0:
+            # get the offsets of the payload within the request, for in-UI highlighting
+            requestHighlights=  [insertionPoint.getPayloadOffsets('{0}={1}'.format(paramName, funcName))]
+            return self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)
+
+        return self._callbacks.applyMarkers(checkRequestResponse, None, None)
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         # This method is called when multiple issues are reported for the same URL
