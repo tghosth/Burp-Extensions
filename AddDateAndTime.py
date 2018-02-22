@@ -21,9 +21,13 @@ class BurpExtender(IBurpExtender, ISessionHandlingAction):
 
         requestInfo = self._helpers.analyzeRequest(currentRequest)
         headers = requestInfo.getHeaders()
+        headersNew = []
         reqBody = currentRequest.getRequest()[requestInfo.getBodyOffset():]
-        headers.add('X-Date-Time: {0}'.format(time.strftime("%c")))
-        message = self._helpers.buildHttpMessage(headers, reqBody)
+        for header in headers:
+            if 'X-Date-Time' not in header:
+                headersNew.append(header)
+        headersNew.append('X-Date-Time: {0}'.format(time.strftime("%c")))
+        message = self._helpers.buildHttpMessage(headersNew, reqBody)
         currentRequest.setRequest(message)
 
 
