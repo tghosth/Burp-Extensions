@@ -6,7 +6,7 @@ import traceback
 '''
 Name:           Proxy Listener Status Header
 Version:        1.0
-Date:           13-Feb02-18
+Date:           13-Feb-18
 Author:         Josh Grossman
 Github:         https://github.com/tghosth/Burp-Extensions
 
