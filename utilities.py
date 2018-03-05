@@ -1,0 +1,21 @@
+
+
+def getInsertionPointText(self, insertionPointIn):
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_ENTIRE_BODY: return "INS_ENTIRE_BODY"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_EXTENSION_PROVIDED: return "INS_EXTENSION_PROVIDED"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_HEADER: return "INS_HEADER"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_AMF: return "INS_PARAM_AMF"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_BODY: return "INS_PARAM_BODY"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_COOKIE: return "INS_PARAM_COOKIE"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_JSON: return "INS_PARAM_JSON"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_MULTIPART_ATTR: return "INS_PARAM_MULTIPART_ATTR"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_NAME_BODY: return "INS_PARAM_NAME_BODY"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_NAME_URL: return "INS_PARAM_NAME_URL"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_URL: return "INS_PARAM_URL"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_XML: return "INS_PARAM_XML"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_XML_ATTR: return "INS_PARAM_XML_ATTR"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_UNKNOWN: return "INS_UNKNOWN"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_FILENAME: return "INS_URL_PATH_FILENAME"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_FOLDER: return "INS_URL_PATH_FOLDER"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_REST: return "INS_URL_PATH_REST"
+    if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_USER_PROVIDED: return "INS_USER_PROVIDED"
