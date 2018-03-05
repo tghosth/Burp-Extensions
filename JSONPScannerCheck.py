@@ -48,49 +48,59 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         # Get the raw base request (byte[]) being scanned
         requestRaw = baseRequestResponse.getRequest()
 
+        # Gets the http service to use to send the requests
+        httpService = baseRequestResponse.getHttpService()
+
+        # Gets the info object for this request/response pair
+        requestInfo = self._helpers.analyzeRequest(baseRequestResponse)
+
         # Iterate through the list of potential JSONP parameter names
         for paramName in self.paramNames:
 
-            originalResponseWithMarkers = self._testForJSONP(baseRequestResponse, requestRaw, paramName, insertionPoint)
+            # Testing to see if the original request provides a JSONP response for the current parameter.
+            originalResponseWithMarkers = self._testForJSONP(httpService, requestRaw, paramName, insertionPoint)
 
+            # If not then we will skip the rest of the code
             if len(originalResponseWithMarkers.getResponseMarkers()) != 0:
 
-                reqWithChanges = requestRaw
-                reqCookieChanged = False
+                '''
+                We now know that the request returns a JSONP response but we now want to establish whether the endpoint
+                we have discovered it on requires some form of authentication. 
+                
+                If so then this is a high risk issue as sensitive data is almost certainly being disclosed. 
+                
+                If not then this is a medium risk issue as it is possible that the data is not sensitive but it may
+                still be intended to only be accessed from a particular IP or network so we still raise as an issue.
+                '''
 
-                # IRequestInfo
-                requestInfo = self._helpers.analyzeRequest(baseRequestResponse)
+                # First we are going to remove any cookies from the request and see whether this resulted in any changes.
+                reqWithChanges = self._removeAllCookies(requestRaw, requestInfo)
+                reqCookieChanged = (len(reqWithChanges) != len(requestRaw))
 
-                for reqParam in requestInfo.getParameters():
-                    if reqParam.getType() == IParameter.PARAM_COOKIE:
-                        reqWithChanges = self._helpers.removeParameter(reqParam)
-                        reqCookieChanged = True
+                # Next we are going to remove any 'Authorization' header and see whether either of these actions
+                # resulted in a change
+                reqWithChanges2 = self._removeAuthHeader(reqWithChanges, requestInfo)
+                reqChanged = reqCookieChanged | (len(reqWithChanges) != len(reqWithChanges2))
 
-
-                oldHeaders = requestInfo.getHeaders()
-                newHeaders = []
-                for reqHead in oldHeaders:
-                    if not 'Authorization' in reqHead:
-                        newHeaders.append(reqHead)
-
-                reqHeaderChanged = (len(oldHeaders) != len(newHeaders))
-
-                if reqHeaderChanged:
-                    reqWithChanges = self._helpers.buildHttpMessage(newHeaders, baseRequestResponse.getRequest()[requestInfo.getBodyOffset():])
-
-                reqChanged = reqCookieChanged | reqHeaderChanged
-
+                # This will be the finding text if the request has not changed or if the same JSONP response is received
+                # even after removing the cookies/Authorization header
                 rating = "Medium"
                 addText = "The JSONP response was returned even without cookies or an Authorization header " \
                           "indicating that the data returned may be less sensitive"
 
                 reqList = [originalResponseWithMarkers]
 
+                # If the request changed (i.e. cookies or Authorization header were removed.)
                 if reqChanged:
-                    nocookieResponseWithMarkers = self._testForJSONP(baseRequestResponse, reqWithChanges, paramName, insertionPoint)
+                    # Send the request again to try and get a JSONP response without the cookies/Authorization header
+                    nocookieResponseWithMarkers = self._testForJSONP(httpService, reqWithChanges2, paramName, insertionPoint)
 
+                    # We want the changed request returned with the finding either way
                     reqList.append(nocookieResponseWithMarkers)
 
+                    # If there are no response markers then this means that when sending with the cookies/Authorization
+                    # header we received a JSONP response but without these we did not receive a JSONP response. This
+                    # indicates that authentication is required for this API therefore raising the rating to High.
                     if len(nocookieResponseWithMarkers.getResponseMarkers()) == 0:
                         rating = "High"
                         addText = "The JSONP response was not returned when cookies or an Authorization header " \
@@ -106,9 +116,15 @@ class BurpExtender(IBurpExtender, IScannerCheck):
                     rating)]
 
 
-    def _testForJSONP(self, baseRequestResponse, requestRaw, paramName, insertionPoint):
+    '''
+    Sends a modified request based on the original request with the supplied JSONP parameter added at the insertion 
+    point specified.
+    '''
+    def _testForJSONP(self, httpService, requestRaw, paramName, insertionPoint):
         # Get a random (non cryptographically secure) six letter string to assign the parameter value
         funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
+
+
 
         # build a JSONP parameter (IParameter) using the current parameter name and the random string generated
         newParameter = self._helpers.buildParameter(paramName, funcName, IParameter.PARAM_URL)
@@ -117,17 +133,59 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         checkRequest = self._helpers.addParameter(requestRaw, newParameter)
 
         # send the request with the added parameter and receive back IHttpRequestResponse
-        checkRequestResponse = self._callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), checkRequest)
+        checkRequestResponse = self._callbacks.makeHttpRequest(httpService, checkRequest)
+
+        print len(checkRequestResponse.getRequest())
+        print 'Params:'
+        for aa in self._helpers.analyzeRequest(checkRequestResponse.getRequest()).getParameters():
+            print aa.getName()
+            print aa.getValue()
 
         # look for matches of our active check grep string
         matches = self._get_matches(checkRequestResponse.getResponse(), '{0}('.format(funcName))
-
+        print matches
         if not len(matches) == 0:
             # get the offsets of the payload within the request, for in-UI highlighting
             requestHighlights=  [insertionPoint.getPayloadOffsets('{0}={1}'.format(paramName, funcName))]
             return self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)
 
         return self._callbacks.applyMarkers(checkRequestResponse, None, None)
+
+
+    '''
+    This will remove all cookies from a request.
+    '''
+    def _removeAllCookies(self, requestRaw, requestInfo):
+        reqWithChanges = requestRaw
+
+        # Iterate through the parameters in the request
+        for reqParam in requestInfo.getParameters():
+            # we only want to remove parameters which are cookies.
+            if reqParam.getType() == IParameter.PARAM_COOKIE:
+                reqWithChanges = self._helpers.removeParameter(reqWithChanges, reqParam)
+
+        return reqWithChanges
+
+    '''
+    This will remove all headers containing the word 'Authorization'.
+    '''
+    def _removeAuthHeader(self, requestRaw, requestInfo):
+        reqWithChanges = requestRaw
+
+        # Get the list of headers and create a new object to pass the headers into
+        oldHeaders = requestInfo.getHeaders()
+        newHeaders = []
+
+        # Put all headers into the new object unless they contain the word 'Authorization'
+        for reqHead in oldHeaders:
+            if not 'Authorization' in reqHead:
+                newHeaders.append(reqHead)
+
+        # If a header has been removed, rebuild the request with the new header list
+        if (len(oldHeaders) != len(newHeaders)):
+            reqWithChanges = self._helpers.buildHttpMessage(newHeaders, requestRaw[requestInfo.getBodyOffset():])
+
+        return reqWithChanges
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         # This method is called when multiple issues are reported for the same URL
@@ -145,7 +203,7 @@ class BurpExtender(IBurpExtender, IScannerCheck):
 
     # helper method to search a response for occurrences of a literal match string
     # and return a list of start/end offsets
-
+    # From: https://github.com/PortSwigger/example-scanner-checks/blob/master/python/CustomScannerChecks.py
     def _get_matches(self, response, match):
         matches = []
         start = 0
@@ -161,25 +219,7 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         return matches
 
 
-    def getInsertionPointText(self, insertionPointIn):
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_ENTIRE_BODY: return "INS_ENTIRE_BODY"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_EXTENSION_PROVIDED: return "INS_EXTENSION_PROVIDED"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_HEADER: return "INS_HEADER"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_AMF: return "INS_PARAM_AMF"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_BODY: return "INS_PARAM_BODY"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_COOKIE: return "INS_PARAM_COOKIE"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_JSON: return "INS_PARAM_JSON"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_MULTIPART_ATTR: return "INS_PARAM_MULTIPART_ATTR"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_NAME_BODY: return "INS_PARAM_NAME_BODY"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_NAME_URL: return "INS_PARAM_NAME_URL"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_URL: return "INS_PARAM_URL"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_XML: return "INS_PARAM_XML"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_PARAM_XML_ATTR: return "INS_PARAM_XML_ATTR"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_UNKNOWN: return "INS_UNKNOWN"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_FILENAME: return "INS_URL_PATH_FILENAME"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_FOLDER: return "INS_URL_PATH_FOLDER"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_URL_PATH_REST: return "INS_URL_PATH_REST"
-        if insertionPointIn.getInsertionPointType() == insertionPointIn.INS_USER_PROVIDED: return "INS_USER_PROVIDED"
+
 #
 # class implementing IScanIssue to hold our custom scan issue details
 #
