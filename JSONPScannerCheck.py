@@ -10,10 +10,7 @@ from array import array
 
 class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
 
-    #
-    # implement IBurpExtender
-    #
-
+    # Implement IBurpExtender
     def registerExtenderCallbacks(self, callbacks):
         # keep a reference to our callbacks object
         self._callbacks = callbacks
@@ -30,9 +27,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
         # register ourselves as a custom scanner check
         callbacks.registerScannerCheck(self)
 
-    #
     # implement IScannerCheck
-    #
     def doPassiveScan(self, baseRequestResponse):
         pass
 
@@ -76,9 +71,9 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
                 still be intended to only be accessed from a particular IP or network so we still raise as an issue.
                 '''
 
-                # First we are going to remove any cookies from the request and see whether this resulted in any changes.
+                # First we are going to remove any cookies from the request and see whether this resulted
+                # in any changes.
                 reqWithChanges, reqChanged = self._removeAllCookies(requestRaw, requestInfo)
-
 
                 # Next we are going to remove any 'Authorization' header and see whether either of these actions
                 # resulted in a change
@@ -111,24 +106,18 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
                                   "was not sent indicating that the data is likely to be sensitive"
 
                 # report the issue
-                return [CustomScanIssue(
+                return [JSONPScanIssue(
                     baseRequestResponse.getHttpService(),
                     self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
                     reqList,
-                    "Endpoint supporting JSONP detected",
                     "Adding a parameter with the name \"{0}\" resulted in a JSONP response. {1}".format(paramName, addText),
                     rating)]
 
-
-    '''
-    Sends a modified request based on the original request with the supplied JSONP parameter added at the insertion 
-    point specified.
-    '''
+    # Sends a modified request based on the original request with the supplied JSONP parameter added at the insertion
+    # point specified.
     def _testForJSONP(self, httpService, requestRaw, paramName, insertionPoint):
         # Get a random (non cryptographically secure) six letter string to assign the parameter value
         funcName = ''.join(random.choice(string.ascii_lowercase) for _ in range(6))
-
-
 
         # build a JSONP parameter (IParameter) using the current parameter name and the random string generated
         newParameter = self._helpers.buildParameter(paramName, funcName, IParameter.PARAM_URL)
@@ -155,10 +144,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
 
         return self._callbacks.applyMarkers(checkRequestResponse, None, None)
 
-
-    '''
-    This will remove all cookies from a request.
-    '''
+    # This will remove all cookies from a request.
     def _removeAllCookies(self, requestRaw, requestInfo):
         reqWithChanges = requestRaw
         reqChanged = False
@@ -172,12 +158,11 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
 
         return reqWithChanges, reqChanged
 
-    '''
-    This will remove all headers containing the word 'Authorization'.
-    '''
-    def _removeAuthHeader(self, requestRaw, requestInfo): #, addMarker):
+    # This will remove all headers containing the word 'Authorization'.
+    def _removeAuthHeader(self, requestRaw, requestInfo):
         reqWithChanges = requestRaw
         reqChanged = False
+
         # Get the list of headers and create a new object to pass the headers into
         oldHeaders = requestInfo.getHeaders()
         newHeaders = []
@@ -187,14 +172,18 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
             if not 'Authorization' in reqHead:
                 newHeaders.append(reqHead)
 
-        # If a header has been removed, rebuild the request with the new header list
+        # If a header has been removed, rebuild the request with the new header list.
+        # At the same time we are adding a marker to tell burp that it needs to remove the cookies a second time
+        # from the request as they get added back by the cookie jar after the first request.
         if (len(oldHeaders) != len(newHeaders)):
             reqChanged = True
-            #if addMarker:
+
+            # Add the "marker" header
             newHeaders.append(self.markerHeader)
 
             reqWithChanges = self._helpers.buildHttpMessage(newHeaders, requestRaw[requestInfo.getBodyOffset():])
 
+        # return the updated request and a boolean indicating whether it has changed.
         return reqWithChanges, reqChanged
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
@@ -228,35 +217,40 @@ class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
 
         return matches
 
-    #
     # implement IHttpListener
-    #
-
     #                      int,      boolean           IHttpRequestResponse
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+
+        # We are only interested if this is a scanner or extender request
         if messageIsRequest and (toolFlag == self._callbacks.TOOL_EXTENDER or toolFlag ==  self._callbacks.TOOL_SCANNER):
-            # Get the raw base request (byte[]) being scanned
-            requestRaw = messageInfo.getRequest()
 
             # Gets the info object for this request/response pair
             requestInfo = self._helpers.analyzeRequest(messageInfo)
 
+            # Iterate through the headers in the request
             for header in requestInfo.getHeaders():
+
+                # We are only interested if the "marker header" is found.
                 if header == self.markerHeader:
+
+                    # Get the raw base request (byte[]) being scanned
+                    requestRaw = messageInfo.getRequest()
+
+                    # remove the cookies again
                     reqWithChanges, reqChanged = self._removeAllCookies(requestRaw, requestInfo)
+
+                    # if the request has changed, update the current request to be the changed request
                     if reqChanged:
                         messageInfo.setRequest(reqWithChanges)
                         return
 
-#
+
 # class implementing IScanIssue to hold our custom scan issue details
-#
-class CustomScanIssue (IScanIssue):
-    def __init__(self, httpService, url, httpMessages, name, detail, severity):
+class JSONPScanIssue (IScanIssue):
+    def __init__(self, httpService, url, httpMessages, detail, severity):
         self._httpService = httpService
         self._url = url
         self._httpMessages = httpMessages
-        self._name = name
         self._detail = detail
         self._severity = severity
 
@@ -264,7 +258,7 @@ class CustomScanIssue (IScanIssue):
         return self._url
 
     def getIssueName(self):
-        return self._name
+        return "Endpoint supporting JSONP detected"
 
     def getIssueType(self):
         return 0
@@ -276,7 +270,8 @@ class CustomScanIssue (IScanIssue):
         return "Certain"
 
     def getIssueBackground(self):
-        pass
+        return "For more information on the risks of JSONP, see <a href='https://securitycafe.ro/2017/01/18/" \
+               "practical-jsonp-injection/'>this blog post</a>."
 
     def getRemediationBackground(self):
         pass
@@ -285,7 +280,9 @@ class CustomScanIssue (IScanIssue):
         return self._detail
 
     def getRemediationDetail(self):
-        pass
+        return "Use of JSONP should be replaced with a secure <a href='https://developer.mozilla.org/en-US/docs/Web/" \
+               "HTTP/CORS'>CORS</a> configuration which allows JavaScript to be called cross-origin but in a " \
+               "secure and managed way."
 
     def getHttpMessages(self):
         return self._httpMessages
