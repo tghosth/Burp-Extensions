@@ -1,4 +1,5 @@
 from burp import IBurpExtender
+from burp import IHttpListener
 from burp import IScannerCheck
 from burp import IScanIssue
 from burp import IParameter
@@ -7,9 +8,7 @@ import random
 import string
 from array import array
 
-
-
-class BurpExtender(IBurpExtender, IScannerCheck):
+class BurpExtender(IBurpExtender, IScannerCheck, IHttpListener):
 
     #
     # implement IBurpExtender
@@ -25,18 +24,22 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         # set our extension name
         callbacks.setExtensionName("JSONP Scanner Check")
 
+        # register an http listener
+        callbacks.registerHttpListener(self)
+
         # register ourselves as a custom scanner check
         callbacks.registerScannerCheck(self)
 
     #
     # implement IScannerCheck
     #
-
     def doPassiveScan(self, baseRequestResponse):
         pass
 
     # Parameter names from https://securitycafe.ro/2017/01/18/practical-jsonp-injection/ :)
     paramNames = {'callback', 'cb', 'jsonp', 'jsonpcallback', 'jcb', 'call'}
+
+    markerHeader = 'X-JSONP-Scanner: Add'
 
     #                      IHttpRequestResponse IScannerInsertionPoint
     def doActiveScan(self, baseRequestResponse, insertionPoint):
@@ -74,13 +77,14 @@ class BurpExtender(IBurpExtender, IScannerCheck):
                 '''
 
                 # First we are going to remove any cookies from the request and see whether this resulted in any changes.
-                reqWithChanges = self._removeAllCookies(requestRaw, requestInfo)
-                reqCookieChanged = (len(reqWithChanges) != len(requestRaw))
+                reqWithChanges, reqChanged = self._removeAllCookies(requestRaw, requestInfo)
+
 
                 # Next we are going to remove any 'Authorization' header and see whether either of these actions
                 # resulted in a change
-                reqWithChanges2 = self._removeAuthHeader(reqWithChanges, requestInfo)
-                reqChanged = reqCookieChanged | (len(reqWithChanges) != len(reqWithChanges2))
+                reqWithChanges2, reqChanged2 = self._removeAuthHeader(reqWithChanges, requestInfo)
+
+                reqChanged = reqChanged or reqChanged2
 
                 # This will be the finding text if the request has not changed or if the same JSONP response is received
                 # even after removing the cookies/Authorization header
@@ -157,21 +161,23 @@ class BurpExtender(IBurpExtender, IScannerCheck):
     '''
     def _removeAllCookies(self, requestRaw, requestInfo):
         reqWithChanges = requestRaw
+        reqChanged = False
 
         # Iterate through the parameters in the request
         for reqParam in requestInfo.getParameters():
             # we only want to remove parameters which are cookies.
             if reqParam.getType() == IParameter.PARAM_COOKIE:
                 reqWithChanges = self._helpers.removeParameter(reqWithChanges, reqParam)
+                reqChanged = True
 
-        return reqWithChanges
+        return reqWithChanges, reqChanged
 
     '''
     This will remove all headers containing the word 'Authorization'.
     '''
-    def _removeAuthHeader(self, requestRaw, requestInfo):
+    def _removeAuthHeader(self, requestRaw, requestInfo): #, addMarker):
         reqWithChanges = requestRaw
-
+        reqChanged = False
         # Get the list of headers and create a new object to pass the headers into
         oldHeaders = requestInfo.getHeaders()
         newHeaders = []
@@ -183,9 +189,13 @@ class BurpExtender(IBurpExtender, IScannerCheck):
 
         # If a header has been removed, rebuild the request with the new header list
         if (len(oldHeaders) != len(newHeaders)):
+            reqChanged = True
+            #if addMarker:
+            newHeaders.append(self.markerHeader)
+
             reqWithChanges = self._helpers.buildHttpMessage(newHeaders, requestRaw[requestInfo.getBodyOffset():])
 
-        return reqWithChanges
+        return reqWithChanges, reqChanged
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         # This method is called when multiple issues are reported for the same URL
@@ -218,7 +228,25 @@ class BurpExtender(IBurpExtender, IScannerCheck):
 
         return matches
 
+    #
+    # implement IHttpListener
+    #
 
+    #                      int,      boolean           IHttpRequestResponse
+    def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+        if messageIsRequest and (toolFlag == self._callbacks.TOOL_EXTENDER or toolFlag ==  self._callbacks.TOOL_SCANNER):
+            # Get the raw base request (byte[]) being scanned
+            requestRaw = messageInfo.getRequest()
+
+            # Gets the info object for this request/response pair
+            requestInfo = self._helpers.analyzeRequest(messageInfo)
+
+            for header in requestInfo.getHeaders():
+                if header == self.markerHeader:
+                    reqWithChanges, reqChanged = self._removeAllCookies(requestRaw, requestInfo)
+                    if reqChanged:
+                        messageInfo.setRequest(reqWithChanges)
+                        return
 
 #
 # class implementing IScanIssue to hold our custom scan issue details
